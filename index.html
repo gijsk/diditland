@@ -67,49 +67,6 @@
         return requestURL("POST", url, "json", postData);
       }
 
-      function getNightlyMonthInfo(nightlyData) {
-        return new Promise(function(resolve, reject) {
-          getHTML(getNightlyMonthURL(nightlyData)).then(function(loadEvent) {
-            var doc = loadEvent.target.response;
-            var expectedString = nightlyData[1] + "-" + nightlyData[2] + "-" + nightlyData[3];
-            var relevantLinks = doc.querySelectorAll("a[href*='" + expectedString + "'][href*='" + repoWeWant + "']");
-            var relevantLink = Array.filter(relevantLinks, function(link) {
-              return link.href.indexOf("l10n") == -1;
-            })[0];
-            if (relevantLink) {
-              resolve(relevantLink.href);
-            } else {
-              reject("No nightly found!");
-            }
-          }, function(err) {
-            console.error(err);
-            reject(err);
-          });
-        })
-      }
-
-      function getNightlyHash(gotNightlyMonthInfo) {
-        return new Promise(function(resolve, reject) {
-          gotNightlyMonthInfo.then(function(nightlyURL) {
-            getJSON(nightlyURL + "firefox-45.0a1.en-US.win32.json").then(function(loadEvent) {
-              if (loadEvent.target.status == 200) {
-                resolve(loadEvent.target.response.moz_source_stamp);
-              } else {
-                // Err, so it looks like the win32 build didn't run? Oops. Try linux:
-                getJSON(nightlyURL + "firefox-45.0a1.en-US.linux-x86_64.json").then(function(loadEvent) {
-                  resolve(loadEvent.target.response.moz_source_stamp);
-                }, function(error) {
-                  console.error(error);
-                  result.appendChild(document.createTextNode("Couldn't find nightly build information!"));
-                });
-              }
-            });
-          }, function(error) {
-            console.error("Failed to get monthly nightly info", error);
-          });
-        });
-      }
-
       function getNightlyFromTaskCluster(nightlyData) {
         return new Promise(function(resolve, reject) {
           postJSON(getTaskClusterURL(nightlyData)).then(function(loadEvent) {
