@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Did it land?</title>
+  </head>
+  <body>
+    <h1>Did it land? Find out today&hellip;</h1>
+    <form id="landed">
+      <input id="bugnumber" required pattern="^\s*\d+\s*$"><br>
+      <input id="nightly" required pattern="^\s*(\d{4})\s*[-.]\s*(\d\d?)\s*[-.]\s*(\d\d?)\s*$"><br>
+      <input type="submit">
+    </form>
+    <h2 id="status"></h2>
+    <div id="result"></div>
+    <script>
+      var nightly, bugnumber, form, result, statusEl;
+      var repoWeWant = "mozilla-central";
+      function getCommentURL(bug) {
+        return "https://bugzilla.mozilla.org/rest/bug/" + bug + "/comment";
+      }
+
+      function getNightlyMonthURL(nightlyData) {
+        return "https://archive.mozilla.org/pub/firefox/nightly/" + nightlyData[1] + "/" + nightlyData[2] + "/";
+      }
+
+      function getLogURLToCheckItemInAncestryOf(repo, cset, other) {
+        repo = repo == "mozilla-central" ? repo : "releases/" + repo;
+        return "https://hg.mozilla.org/" + repo + "/log?rev=" + encodeURIComponent("::" + other + " & " + cset);
+      }
+
+      function getTaskClusterURL(nightlyData) {
+        return "https://index.taskcluster.net/v1/namespaces/gecko.v2.mozilla-central.nightly." + 
+               Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
+               ".revision";
+      }
+
+      function requestURL(method, url, responseType, postData) {
+        return new Promise(function(resolve, reject) {
+          var xhr = new XMLHttpRequest();
+          xhr.open(method.toUpperCase(), url);
+          if (responseType == "json") {
+            xhr.setRequestHeader("Accept", "application/json");
+          } else if (responseType == "html") {
+            xhr.setRequestHeader("Accept", "text/html");
+          }
+          xhr.responseType = responseType;
+          xhr.onload = resolve;
+          xhr.onerror = reject;
+          if (postData) {
+            xhr.send(postData);
+          } else {
+            xhr.send();
+          }
+        });
+      }
+
+      function getJSON(url) {
+        return requestURL("GET", url, "json");
+      }
+
+      function getHTML(url) {
+        return requestURL("GET", url, "document");
+      }
+
+      function postJSON(url, postData) {
+        return requestURL("POST", url, "json", postData);
+      }
+
+      function getNightlyMonthInfo(nightlyData) {
+        return new Promise(function(resolve, reject) {
+          getHTML(getNightlyMonthURL(nightlyData)).then(function(loadEvent) {
+            var doc = loadEvent.target.response;
+            var expectedString = nightlyData[1] + "-" + nightlyData[2] + "-" + nightlyData[3];
+            var relevantLinks = doc.querySelectorAll("a[href*='" + expectedString + "'][href*='" + repoWeWant + "']");
+            var relevantLink = Array.filter(relevantLinks, function(link) {
+              return link.href.indexOf("l10n") == -1;
+            })[0];
+            if (relevantLink) {
+              resolve(relevantLink.href);
+            } else {
+              reject("No nightly found!");
+            }
+          }, function(err) {
+            console.error(err);
+            reject(err);
+          });
+        })
+      }
+
+      function getNightlyHash(gotNightlyMonthInfo) {
+        return new Promise(function(resolve, reject) {
+          gotNightlyMonthInfo.then(function(nightlyURL) {
+            getJSON(nightlyURL + "firefox-45.0a1.en-US.win32.json").then(function(loadEvent) {
+              if (loadEvent.target.status == 200) {
+                resolve(loadEvent.target.response.moz_source_stamp);
+              } else {
+                // Err, so it looks like the win32 build didn't run? Oops. Try linux:
+                getJSON(nightlyURL + "firefox-45.0a1.en-US.linux-x86_64.json").then(function(loadEvent) {
+                  resolve(loadEvent.target.response.moz_source_stamp);
+                }, function(error) {
+                  console.error(error);
+                  result.appendChild(document.createTextNode("Couldn't find nightly build information!"));
+                });
+              }
+            });
+          }, function(error) {
+            console.error("Failed to get monthly nightly info", error);
+          });
+        });
+      }
+
+      function getNightlyFromTaskCluster(nightlyData) {
+        return new Promise(function(resolve, reject) {
+          postJSON(getTaskClusterURL(nightlyData)).then(function(loadEvent) {
+            var obj = loadEvent.target.response;
+            if (loadEvent.target.status == 200) {
+              var hashes = obj.namespaces.map(function(x) { return x.name });
+              if (hashes.length > 1) {
+                result.appendChild(document.createTextNode("Warning: more than one nightly built that day: " + hashes.join(', ')));
+              } else if (hashes.length == 0) {
+                reject("No nightly built that day.");
+                return;
+              }
+              resolve(hashes.pop());
+            } else {
+              reject("Didn't load correctly, got " + loadEvent.target.status + " response: " + JSON.stringify(obj));
+            }
+          }, function(err) {
+            console.error(err);
+            reject(err);
+          });
+        })
+      }
+
+      function getCommitInfo(bug) {
+        return new Promise(function(resolve, reject) {
+          getJSON(getCommentURL(bug)).then(function(loadEvent) {
+            var response = loadEvent.target.response;
+            if (response.error) {
+              result.appendChild(document.createTextNode("Got error from bugzilla, see console."));
+              console.error(response);
+              reject(response);
+              return;
+            }
+            var comments = response.bugs[bug].comments;
+            var repoToHashMap = new Map();
+            var hglinkMultiMatch = /https?:\/\/hg\.mozilla\.org\/([\w-]+\/)+rev\/([a-f0-9]+)/gi;
+            // The same, but without the 'global' flag so we get the groups:
+            var hglinkSingleMatch = new RegExp(hglinkMultiMatch, "i");
+            comments.forEach(function(comment) {
+              var hglinks = comment.text.match(hglinkMultiMatch);
+              if (hglinks) {
+                for (var link of hglinks) {
+                  var linkInfo = link.match(hglinkSingleMatch);
+                  // This will be the trailing path component, so for
+                  // ...org/releases/mozilla-beta/
+                  // ...org/integration/fx-team/
+                  // ...org/mozilla-central/
+                  // it will always do the right thing:
+                  var repo = linkInfo[1].replace(/\/$/i, "");
+                  var hash = linkInfo[2];
+                  if (!repoToHashMap.has(repo)) {
+                    repoToHashMap.set(repo, new Set());
+                  }
+                  var repoInfo = repoToHashMap.get(repo);
+                  repoInfo.add(hash);
+                }
+              }
+            });
+            resolve(repoToHashMap);
+          }, function(error) {
+            console.error(error);
+            result.appendChild(document.createTextNode("Failed to get comments for bug " + bug + "."));
+            reject(error);
+          });
+        })
+      }
+
+      function checkFixedInBuild([repoToHashMap, buildHash]) {
+        var relevantChangesets = repoToHashMap.get(repoWeWant);
+        var checks = [];
+        for (var cset of relevantChangesets) {
+          checks.push(new Promise(function(resolve, reject) {
+            var desiredURL = getLogURLToCheckItemInAncestryOf(repoWeWant, cset, buildHash);
+            getHTML(desiredURL).then(function(loadEvent) {
+              try {
+                resolve(!!loadEvent.target.response.querySelector(".log_link"));
+              } catch (ex) {
+                reject(ex);
+              }
+            });
+          }));
+        }
+        return Promise.all(checks).then(function(checkResults) {
+          if (checkResults.every(function(x) { return x })) {
+            statusEl.textContent = "Yes";
+          } else if (checkResults.some(function(x) { return x })) {
+            statusEl.textContent = "Maybe";
+          } else {
+            statusEl.textContent = "No";
+          }
+        });
+      }
+
+      function onSubmit(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var bug = bugnumber.value.trim();
+        var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
+        var gotCommitInfo = getCommitInfo(bug);
+
+        //var gotNightlyMonthInfo = getNightlyMonthInfo(nightlyData);
+        //var gotNightlyHash = getNightlyHash(gotNightlyMonthInfo);
+        var gotNightlyHash = getNightlyFromTaskCluster(nightlyData);
+
+        // Ensure we get some informational output:
+        gotCommitInfo.then(function(repoToHashMap) {
+          for (var [repo, hashes] of repoToHashMap) {
+            var p = document.createElement("p");
+            p.textContent = repo + ": hashes " + [... hashes].join(', ') + " landed.";
+            result.appendChild(p);
+          }
+        });
+        gotNightlyHash.then(function(hash) {
+          var p = document.createElement("p");
+          p.textContent = "nightly that day has hash: " + hash;
+          result.appendChild(p);
+        });
+        // And do the final trick:
+        Promise.all([gotCommitInfo, gotNightlyHash]).then(checkFixedInBuild, function(someError) {
+          statusEl.textContent = "No idea - something broke.";
+          console.error(someError);
+        });
+        return false;
+      }
+
+      function onLoad() {
+        nightly = document.getElementById("nightly");
+        bugnumber = document.getElementById("bugnumber");
+        result = document.getElementById("result");
+        statusEl = document.getElementById("status");
+
+        form = document.getElementById("landed");
+        form.addEventListener("submit", onSubmit, false);
+
+        if (!nightly.value) {
+          var today = new Date();
+          nightly.value = today.getFullYear() + "-" + (today.getMonth() + 1) + "-" + today.getDate();
+        }
+      }
+      document.addEventListener("DOMContentLoaded", onLoad, false);
+    </script>
+  </body>
+</html>
