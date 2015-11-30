@@ -2,6 +2,10 @@ var nightly, bugnumber, form, result, statusEl;
 var gRepoWeWant = "mozilla-central";
 var gFoundBackout = false;
 
+var gMercurialLinkMultiMatch = /https?:\/\/hg\.mozilla\.org\/([\w-]+\/)+rev\/([a-f0-9]+)/gi;
+// The same, but without the 'global' flag so we get the groups:
+var gMercurialLinkSingleMatch = new RegExp(gMercurialLinkMultiMatch, "i");
+
 function getCommentURL(bug) {
   return "https://bugzilla.mozilla.org/rest/bug/" + bug + "/comment";
 }
@@ -19,6 +23,19 @@ function getTaskClusterURL(nightlyData) {
 
 function getBetaJSONURL(betaTag) {
   return "https://hg.mozilla.org/releases/mozilla-beta/json-rev/" + encodeURIComponent(betaTag);
+}
+
+function parseRepoAndHashFromURL(url) {
+  var linkInfo = url.match(gMercurialLinkSingleMatch);
+  if (linkInfo) {
+    // This will be the trailing path component, so for
+    // ...org/releases/mozilla-beta/
+    // ...org/integration/fx-team/
+    // ...org/mozilla-central/
+    // it will always do the right thing:
+    return [linkInfo[1].replace(/\/$/i, ""), linkInfo[2]];
+  }
+  return null;
 }
 
 function appendStatusMsg(msg) {
@@ -114,21 +131,11 @@ function getCommitInfo(bug) {
       }
       var comments = response.bugs[bug].comments;
       var repoToHashMap = new Map();
-      var hglinkMultiMatch = /https?:\/\/hg\.mozilla\.org\/([\w-]+\/)+rev\/([a-f0-9]+)/gi;
-      // The same, but without the 'global' flag so we get the groups:
-      var hglinkSingleMatch = new RegExp(hglinkMultiMatch, "i");
       comments.forEach(function(comment) {
-        var hglinks = comment.text.match(hglinkMultiMatch);
+        var hglinks = comment.text.match(gMercurialLinkMultiMatch);
         if (hglinks) {
           for (var link of hglinks) {
-            var linkInfo = link.match(hglinkSingleMatch);
-            // This will be the trailing path component, so for
-            // ...org/releases/mozilla-beta/
-            // ...org/integration/fx-team/
-            // ...org/mozilla-central/
-            // it will always do the right thing:
-            var repo = linkInfo[1].replace(/\/$/i, "");
-            var hash = linkInfo[2];
+            var [repo, hash] = parseRepoAndHashFromURL(link);
             if (!repoToHashMap.has(repo)) {
               repoToHashMap.set(repo, new Set());
             }
@@ -190,22 +197,41 @@ function onSubmit(e) {
   e.preventDefault();
   e.stopPropagation();
   result.innerHTML = "";
-  statusEl.textContent = "Checking...";
+  statusEl.textContent = "";
 
   gRepoWeWant = document.querySelector("input[name=repo]:checked").value;
   gFoundBackout = false;
 
-  var bug = bugnumber.value.trim();
-  var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
-  var gotCommitInfo = getCommitInfo(bug);
+  var source = document.querySelector("input[name=commit-source]:checked").value;
+  var gotCommitInfo;
+  if (source == "bug") {
+    var bug = bugnumber.value.trim();
+    gotCommitInfo = getCommitInfo(bug);
+  } else {
+    var repoAndHash = parseRepoAndHashFromURL(revision.value);
+    if (!repoAndHash) {
+      appendStatusMsg("No valid revision URL was provided.");
+      return;
+    }
+    var commitInfo = new Map([[repoAndHash[0], new Set([repoAndHash[1]])]]);
+    gotCommitInfo = Promise.resolve(commitInfo);
+  }
+
   var gotBuildHash, buildHashMessage;
   if (gRepoWeWant == "mozilla-beta") {
     buildHashMessage = "beta tag: ";
     gotBuildHash = getBetaPromise();
   } else {
+    var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
+    if (!nightlyData) {
+      appendStatusMsg("Invalid nightly date specified (use yyyy-mm-dd).");
+      return;
+    }
     buildHashMessage = "nightly that day has hash: ";
     gotBuildHash = getNightlyFromTaskCluster(nightlyData);
   }
+
+  statusEl.textContent = "Checking...";
 
   // Ensure we get some informational output:
   gotCommitInfo.then(function(repoToHashMap) {
@@ -233,6 +259,7 @@ function onLoad() {
   bugnumber = document.getElementById("bugnumber");
   result = document.getElementById("result");
   statusEl = document.getElementById("status");
+  revision = document.getElementById("revision");
 
   form = document.getElementById("landed");
   form.addEventListener("submit", onSubmit, false);
