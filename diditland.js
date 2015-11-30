@@ -208,12 +208,8 @@ function onSubmit(e) {
     var bug = bugnumber.value.trim();
     gotCommitInfo = getCommitInfo(bug);
   } else {
-    var repoAndHash = parseRepoAndHashFromURL(revision.value);
-    if (!repoAndHash) {
-      appendStatusMsg("No valid revision URL was provided.");
-      return;
-    }
-    var commitInfo = new Map([[repoAndHash[0], new Set([repoAndHash[1]])]]);
+    var hash = revision.value;
+    var commitInfo = new Map([[gRepoWeWant, new Set([hash])]]);
     gotCommitInfo = Promise.resolve(commitInfo);
   }
 
