@@ -6,10 +6,6 @@ function getCommentURL(bug) {
   return "https://bugzilla.mozilla.org/rest/bug/" + bug + "/comment";
 }
 
-function getNightlyMonthURL(nightlyData) {
-  return "https://archive.mozilla.org/pub/firefox/nightly/" + nightlyData[1] + "/" + nightlyData[2] + "/";
-}
-
 function getLogURLToCheckItemInAncestryOf(repo, cset, other) {
   repo = repo == "mozilla-central" ? repo : "releases/" + repo;
   return "https://hg.mozilla.org/" + repo + "/log?rev=" + encodeURIComponent("::" + other + " & " + cset);
@@ -23,6 +19,12 @@ function getTaskClusterURL(nightlyData) {
 
 function getBetaJSONURL(betaTag) {
   return "https://hg.mozilla.org/releases/mozilla-beta/json-rev/" + encodeURIComponent(betaTag);
+}
+
+function appendStatusMsg(msg) {
+  var p = document.createElement("p");
+  p.textContent = msg;
+  result.appendChild(p);
 }
 
 function requestURL(method, url, responseType, postData) {
@@ -93,7 +95,7 @@ function getBetaPromise() {
         reject("No such beta build exists.");
       }
     }, function(err) {
-      result.appendChild(document.createTextNode(err));
+      appendStatusMsg(err);
       console.error(err);
       reject(err);
     });
@@ -105,7 +107,7 @@ function getCommitInfo(bug) {
     getJSON(getCommentURL(bug)).then(function(loadEvent) {
       var response = loadEvent.target.response;
       if (response.error) {
-        result.appendChild(document.createTextNode("Got error from bugzilla, see console."));
+        appendStatusMsg("Got error from bugzilla, see console.");
         console.error(response);
         reject(response);
         return;
@@ -137,9 +139,7 @@ function getCommitInfo(bug) {
                 comment.text.toLowerCase().indexOf("backout") != -1 ||
                 comment.text.toLowerCase().indexOf("backed out") != -1) {
               gFoundBackout = true;
-              var p = document.createElement("p");
-              p.textContent = "Warning: it looks like one or more changesets were backed out.";
-              result.appendChild(p);
+              appendStatusMsg("Warning: it looks like one or more changesets were backed out.");
             }
           }
         }
@@ -147,7 +147,7 @@ function getCommitInfo(bug) {
       resolve(repoToHashMap);
     }, function(error) {
       console.error(error);
-      result.appendChild(document.createTextNode("Failed to get comments for bug " + bug + "."));
+      appendStatusMsg("Failed to get comments for bug " + bug + ".");
       reject(error);
     });
   })
@@ -189,12 +189,12 @@ function checkFixedInBuild([repoToHashMap, buildHash]) {
 function onSubmit(e) {
   e.preventDefault();
   e.stopPropagation();
-  while (result.firstChild) {
-    result.firstChild.remove();
-  }
+  result.innerHTML = "";
   statusEl.textContent = "Checking...";
+
   gRepoWeWant = document.querySelector("input[name=repo]:checked").value;
   gFoundBackout = false;
+
   var bug = bugnumber.value.trim();
   var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
   var gotCommitInfo = getCommitInfo(bug);
@@ -210,20 +210,14 @@ function onSubmit(e) {
   // Ensure we get some informational output:
   gotCommitInfo.then(function(repoToHashMap) {
     for (var [repo, hashes] of repoToHashMap) {
-      var p = document.createElement("p");
-      p.textContent = repo + ": hashes " + [... hashes].join(', ') + " landed.";
-      result.appendChild(p);
+      appendStatusMsg(repo + ": hashes " + [... hashes].join(', ') + " landed.");
     }
   });
   var safeGotBuildHash = gotBuildHash.then(function(hash) {
-    var p = document.createElement("p");
-    p.textContent = buildHashMessage + hash;
-    result.appendChild(p);
+    appendStatusMsg(buildHashMessage + hash);
     return hash;
   }, function(error) {
-    var p = document.createElement("p");
-    p.textContent = "Failed to get build hash: " + error;
-    result.appendChild(p);
+    appendStatusMsg("Failed to get build hash: " + error);
     statusEl.textContent = "Failed to get build hash for the nightly/aurora/beta build you indicated."
   });
   // And do the final trick:
