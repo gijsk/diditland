@@ -5,17 +5,40 @@
     <title>Did it land?</title>
   </head>
   <body>
-    <h1>Did it land? Find out today&hellip;</h1>
+    <h1>Did it land? Find out now!</h1>
     <form id="landed">
       <input id="bugnumber" required pattern="^\s*\d+\s*$"><br>
-      <input id="nightly" required pattern="^\s*(\d{4})\s*[-.]\s*(\d\d?)\s*[-.]\s*(\d\d?)\s*$"><br>
+      <input type="radio" id="mc-radio" name="repo" value="mozilla-central" checked><label for="mc-radio"> nightly</label>
+      <input type="radio" id="ma-radio" name="repo" value="mozilla-aurora"><label for="ma-radio"> aurora</label>
+      <input type="radio" id="beta-radio" name="repo" value="mozilla-beta"><label for="beta-radio"> beta</label>
+      <br>
+      <br>
+      <input id="nightly" required pattern="^\s*(\d{4})\s*[-.]\s*(\d\d?)\s*[-.]\s*(\d\d?)\s*$">
+      <input id="beta-version" type="number" required min="43" step="1" value="43">
+      <input id="beta-build" type="number" required min="1" max="15" step="1" value="1">
+
+      <br>
+      <br>
       <input type="submit">
     </form>
+    <style>
+      #nightly, #beta-build, #beta-version {
+        display: none;
+      }
+      #beta-radio:checked ~ #beta-version,
+      #beta-radio:checked ~ #beta-build,
+      #mc-radio:checked ~ #nightly,
+      #ma-radio:checked ~ #nightly {
+        display: initial;
+      }
+
+
+    </style>
     <h2 id="status"></h2>
     <div id="result"></div>
     <script>
       var nightly, bugnumber, form, result, statusEl;
-      var repoWeWant = "mozilla-central";
+      var gRepoWeWant = "mozilla-central";
       function getCommentURL(bug) {
         return "https://bugzilla.mozilla.org/rest/bug/" + bug + "/comment";
       }
@@ -30,9 +53,13 @@
       }
 
       function getTaskClusterURL(nightlyData) {
-        return "https://index.taskcluster.net/v1/namespaces/gecko.v2.mozilla-central.nightly." + 
+        return "https://index.taskcluster.net/v1/namespaces/gecko.v2." + gRepoWeWant + ".nightly." +
                Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
                ".revision";
+      }
+
+      function getBetaJSONURL(betaTag) {
+        return "https://hg.mozilla.org/releases/mozilla-beta/json-rev/" + encodeURIComponent(betaTag);
       }
 
       function requestURL(method, url, responseType, postData) {
@@ -90,6 +117,26 @@
         })
       }
 
+      function getBetaPromise() {
+        var version = document.getElementById("beta-version").value;
+        var build = document.getElementById("beta-build").value;
+        var tag = "FIREFOX_" + version + "_0b" + build + "_RELEASE";
+        return new Promise(function(resolve, reject) {
+          getJSON(getBetaJSONURL(tag)).then(function(loadEvent) {
+            var response = loadEvent.target.response;
+            if (response.tags) {
+              resolve(tag);
+            } else {
+              reject("No such beta build exists.");
+            }
+          }, function(err) {
+            result.appendChild(document.createTextNode(err));
+            console.error(err);
+            reject(err);
+          });
+        });
+      }
+
       function getCommitInfo(bug) {
         return new Promise(function(resolve, reject) {
           getJSON(getCommentURL(bug)).then(function(loadEvent) {
@@ -135,19 +182,26 @@
       }
 
       function checkFixedInBuild([repoToHashMap, buildHash]) {
-        var relevantChangesets = repoToHashMap.get(repoWeWant);
+        if (!buildHash) {
+          return;
+        }
+        var relevantChangesets = repoToHashMap.get(gRepoWeWant);
         var checks = [];
-        for (var cset of relevantChangesets) {
-          checks.push(new Promise(function(resolve, reject) {
-            var desiredURL = getLogURLToCheckItemInAncestryOf(repoWeWant, cset, buildHash);
-            getHTML(desiredURL).then(function(loadEvent) {
-              try {
-                resolve(!!loadEvent.target.response.querySelector(".log_link"));
-              } catch (ex) {
-                reject(ex);
-              }
-            });
-          }));
+        if (relevantChangesets) {
+          for (var cset of relevantChangesets) {
+            checks.push(new Promise(function(resolve, reject) {
+              var desiredURL = getLogURLToCheckItemInAncestryOf(gRepoWeWant, cset, buildHash);
+              getHTML(desiredURL).then(function(loadEvent) {
+                try {
+                  resolve(!!loadEvent.target.response.querySelector(".log_link"));
+                } catch (ex) {
+                  reject(ex);
+                }
+              });
+            }));
+          }
+        } else {
+          checks.push(Promise.resolve(false));
         }
         return Promise.all(checks).then(function(checkResults) {
           if (checkResults.every(function(x) { return x })) {
@@ -163,13 +217,22 @@
       function onSubmit(e) {
         e.preventDefault();
         e.stopPropagation();
+        while (result.firstChild) {
+          result.firstChild.remove();
+        }
+        statusEl.textContent = "Checking...";
+        gRepoWeWant = document.querySelector("input[name=repo]:checked").value;
         var bug = bugnumber.value.trim();
         var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
         var gotCommitInfo = getCommitInfo(bug);
-
-        //var gotNightlyMonthInfo = getNightlyMonthInfo(nightlyData);
-        //var gotNightlyHash = getNightlyHash(gotNightlyMonthInfo);
-        var gotNightlyHash = getNightlyFromTaskCluster(nightlyData);
+        var gotBuildHash, buildHashMessage;
+        if (gRepoWeWant == "mozilla-beta") {
+          buildHashMessage = "beta tag: ";
+          gotBuildHash = getBetaPromise();
+        } else {
+          buildHashMessage = "nightly that day has hash: ";
+          gotBuildHash = getNightlyFromTaskCluster(nightlyData);
+        }
 
         // Ensure we get some informational output:
         gotCommitInfo.then(function(repoToHashMap) {
@@ -179,13 +242,19 @@
             result.appendChild(p);
           }
         });
-        gotNightlyHash.then(function(hash) {
+        var safeGotBuildHash = gotBuildHash.then(function(hash) {
           var p = document.createElement("p");
-          p.textContent = "nightly that day has hash: " + hash;
+          p.textContent = buildHashMessage + hash;
           result.appendChild(p);
+          return hash;
+        }, function(error) {
+          var p = document.createElement("p");
+          p.textContent = "Failed to get build hash: " + error;
+          result.appendChild(p);
+          statusEl.textContent = "Failed to get build hash for the nightly/aurora/beta build you indicated."
         });
         // And do the final trick:
-        Promise.all([gotCommitInfo, gotNightlyHash]).then(checkFixedInBuild, function(someError) {
+        Promise.all([gotCommitInfo, safeGotBuildHash]).then(checkFixedInBuild, function(someError) {
           statusEl.textContent = "No idea - something broke.";
           console.error(someError);
         });
