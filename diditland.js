@@ -116,14 +116,6 @@ function getCommitInfo(bug) {
       // The same, but without the 'global' flag so we get the groups:
       var hglinkSingleMatch = new RegExp(hglinkMultiMatch, "i");
       comments.forEach(function(comment) {
-        if (!gFoundBackout &&
-            comment.text.toLowerCase().indexOf("backout") != -1 ||
-            comment.text.toLowerCase().indexOf("backed out") != -1) {
-          gFoundBackout = true;
-          var p = document.createElement("p");
-          p.textContent = "Warning: one or more changesets might have been backed out. Results might be wrong.";
-          result.appendChild(p);
-        }
         var hglinks = comment.text.match(hglinkMultiMatch);
         if (hglinks) {
           for (var link of hglinks) {
@@ -140,6 +132,15 @@ function getCommitInfo(bug) {
             }
             var repoInfo = repoToHashMap.get(repo);
             repoInfo.add(hash);
+
+            if (repo == gRepoWeWant && !gFoundBackout &&
+                comment.text.toLowerCase().indexOf("backout") != -1 ||
+                comment.text.toLowerCase().indexOf("backed out") != -1) {
+              gFoundBackout = true;
+              var p = document.createElement("p");
+              p.textContent = "Warning: it looks like one or more changesets were backed out.";
+              result.appendChild(p);
+            }
           }
         }
       });
