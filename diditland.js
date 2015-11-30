@@ -1,5 +1,7 @@
 var nightly, bugnumber, form, result, statusEl;
 var gRepoWeWant = "mozilla-central";
+var gFoundBackout = false;
+
 function getCommentURL(bug) {
   return "https://bugzilla.mozilla.org/rest/bug/" + bug + "/comment";
 }
@@ -114,6 +116,14 @@ function getCommitInfo(bug) {
       // The same, but without the 'global' flag so we get the groups:
       var hglinkSingleMatch = new RegExp(hglinkMultiMatch, "i");
       comments.forEach(function(comment) {
+        if (!gFoundBackout &&
+            comment.text.toLowerCase().indexOf("backout") != -1 ||
+            comment.text.toLowerCase().indexOf("backed out") != -1) {
+          gFoundBackout = true;
+          var p = document.createElement("p");
+          p.textContent = "Warning: one or more changesets might have been backed out. Results might be wrong.";
+          result.appendChild(p);
+        }
         var hglinks = comment.text.match(hglinkMultiMatch);
         if (hglinks) {
           for (var link of hglinks) {
@@ -165,7 +175,7 @@ function checkFixedInBuild([repoToHashMap, buildHash]) {
     checks.push(Promise.resolve(false));
   }
   return Promise.all(checks).then(function(checkResults) {
-    if (checkResults.every(function(x) { return x })) {
+    if (!gFoundBackout && checkResults.every(function(x) { return x })) {
       statusEl.textContent = "Yes";
     } else if (checkResults.some(function(x) { return x })) {
       statusEl.textContent = "Maybe";
@@ -183,6 +193,7 @@ function onSubmit(e) {
   }
   statusEl.textContent = "Checking...";
   gRepoWeWant = document.querySelector("input[name=repo]:checked").value;
+  gFoundBackout = false;
   var bug = bugnumber.value.trim();
   var nightlyData = nightly.value.match(new RegExp(nightly.getAttribute("pattern")));
   var gotCommitInfo = getCommitInfo(bug);
