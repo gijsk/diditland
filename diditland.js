@@ -262,7 +262,9 @@ function onLoad() {
 
   if (!nightly.value) {
     var today = new Date();
-    nightly.value = today.getFullYear() + "-" + (today.getMonth() + 1) + "-" + today.getDate();
+    var month = ("0" + (today.getMonth() + 1)).substr(-2);
+    var day = ("0" + today.getDate()).substr(-2);
+    nightly.value = today.getFullYear() + "-" + month + "-" + day;
   }
 }
 
