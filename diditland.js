@@ -48,6 +48,9 @@ function requestURL(method, url, responseType, postData) {
   return new Promise(function(resolve, reject) {
     var xhr = new XMLHttpRequest();
     xhr.open(method.toUpperCase(), url);
+    if (method.toUpperCase() == 'POST') {
+      xhr.setRequestHeader("Content-Type", "application/json");
+    }
     if (responseType == "json") {
       xhr.setRequestHeader("Accept", "application/json");
     } else if (responseType == "html") {
