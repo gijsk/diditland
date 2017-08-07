@@ -21,6 +21,12 @@ function getTaskClusterURL(nightlyData) {
          ".revision";
 }
 
+function getTasksForHash(nightlyData, hash) {
+  return "https://index.taskcluster.net/v1/tasks/gecko.v2." + gRepoWeWant + ".nightly." +
+         Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
+         ".revision." + hash + ".firefox";
+}
+
 function getBetaJSONURL(betaTag) {
   return "https://hg.mozilla.org/releases/mozilla-beta/json-rev/" + encodeURIComponent(betaTag);
 }
@@ -91,7 +97,26 @@ function getNightlyFromTaskCluster(nightlyData) {
           reject("No nightly built that day.");
           return;
         }
-        resolve(hashes.pop());
+        Promise.all(hashes.map(function(hash) {
+          return postJSON(getTasksForHash(nightlyData, hash)).then(function(taskLoadEvent) {
+            if (taskLoadEvent.target.status != 200) {
+              reject("Didn't load tasks correctly, got " + taskLoadEvent.target.status +
+                     " response: " + JSON.stringify(taskLoadEvent.target.response));
+              return null;
+            }
+            return {tasks: taskLoadEvent.target.response.tasks, hash: hash}
+          });
+        })).then(function (results) {
+          for (var i = 0; i < results.length; i++) {
+            var tasks = results[i].tasks.map(function(task) { return task.expires; });
+            tasks.sort();
+            results[i].expires = tasks[0];
+          }
+          results.sort(function(a, b) {
+            return a.expires < b.expires;
+          });
+          resolve(results[0].hash);
+        });
       } else {
         reject("Didn't load correctly, got " + loadEvent.target.status + " response: " + JSON.stringify(obj));
       }
