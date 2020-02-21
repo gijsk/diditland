@@ -2,6 +2,16 @@ var nightly, bugnumber, form, result, statusEl;
 var gRepoWeWant = "mozilla-central";
 var gFoundBackout = false;
 
+var gCanonicalRepoURLs = new Map([
+  ["fx-team", "https://hg.mozilla.org/integration/fx-team/rev/"],
+  ["mozilla-inbound", "https://hg.mozilla.org/integration/mozilla-inbound/rev/"],
+  ["autoland", "https://hg.mozilla.org/integration/autoland/rev/"],
+  ["mozilla-central", "https://hg.mozilla.org/mozilla-central/rev/"],
+  ["mozilla-beta", "https://hg.mozilla.org/releases/mozilla-beta/rev/"],
+  ["mozilla-release", "https://hg.mozilla.org/releases/mozilla-release/rev/"],
+]);
+
+
 var gMercurialLinkMultiMatch = /https?:\/\/hg\.mozilla\.org\/([\w-]+\/)+rev\/([a-f0-9]+)/gi;
 // The same, but without the 'global' flag so we get the groups:
 var gMercurialLinkSingleMatch = new RegExp(gMercurialLinkMultiMatch, "i");
@@ -16,7 +26,7 @@ function getLogURLToCheckItemInAncestryOf(repo, cset, other) {
 }
 
 function getTaskClusterURL(nightlyData) {
-  return "https://firefox-ci-tc.services.mozilla.com/tasks/index/gecko.v2." + gRepoWeWant + ".nightly." +
+  return "https://firefox-ci-tc.services.mozilla.com/api/index/v1/namespaces/gecko.v2." + gRepoWeWant + ".nightly." +
          Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
          ".revision";
 }
@@ -40,7 +50,11 @@ function parseRepoAndHashFromURL(url) {
 
 function appendStatusMsg(msg) {
   var p = document.createElement("p");
-  p.textContent = msg;
+  if (typeof msg == "string") {
+    p.textContent = msg;
+  } else {
+    p.appendChild(msg);
+  }
   result.appendChild(p);
 }
 
@@ -86,7 +100,17 @@ function getNightlyFromTaskCluster(nightlyData) {
       if (loadEvent.target.status == 200) {
         var hashes = obj.namespaces.map(function(x) { return x.name });
         if (hashes.length > 1) {
-          result.appendChild(document.createTextNode("Warning: more than one nightly built that day: " + hashes.join(', ')));
+          result.appendChild(document.createTextNode("Warning: more than one nightly built that day: "));
+          for (let i = 0; i < hashes.length; i++) {
+            let hash = hashes[i];
+            let link = document.createElement("a");
+            link.href = gCanonicalRepoURLs.get(gRepoWeWant) + hash;
+            link.textContent = hash;
+            result.appendChild(link);
+            if (i < hashes.length - 1) {
+              result.append(", ");
+            }
+          }
         } else if (hashes.length == 0) {
           reject("No nightly built that day.");
           return;
@@ -189,7 +213,7 @@ function checkFixedInBuild([repoToHashMap, buildHash]) {
     if (!gFoundBackout && checkResults.every(function(x) { return x })) {
       statusEl.textContent = "Yes";
     } else if (checkResults.some(function(x) { return x })) {
-      statusEl.textContent = "Maybe";
+      statusEl.textContent = "Maybe - only some of the changes landed in this nightly";
     } else {
       statusEl.textContent = "No";
     }
@@ -235,11 +259,32 @@ function onSubmit(e) {
   // Ensure we get some informational output:
   gotCommitInfo.then(function(repoToHashMap) {
     for (var [repo, hashes] of repoToHashMap) {
-      appendStatusMsg(repo + ": hashes " + [... hashes].join(', ') + " landed.");
+      let content = new DocumentFragment();
+      content.append(repo);
+      content.append(": hashes ");
+      hashes = Array.from(hashes);
+      for (var i = 0; i < hashes.length; i++) {
+        let hash = hashes[i];
+        let link = document.createElement("a");
+        link.href = gCanonicalRepoURLs.get(repo) + hash;
+        link.textContent = hash;
+        content.append(link);
+        if (i < hashes.length - 1) {
+          content.append(", ");
+        }
+      }
+      content.append(" landed.");
+      appendStatusMsg(content);
     }
   });
   var safeGotBuildHash = gotBuildHash.then(function(hash) {
-    appendStatusMsg(buildHashMessage + hash);
+    let docFrag = new DocumentFragment();
+    docFrag.append(buildHashMessage);
+    let link = document.createElement("a");
+    link.href = gCanonicalRepoURLs.get(gRepoWeWant) + hash;
+    link.textContent = hash;
+    docFrag.append(link);
+    appendStatusMsg(docFrag);
     return hash;
   }, function(error) {
     appendStatusMsg("Failed to get build hash: " + error);
@@ -247,8 +292,11 @@ function onSubmit(e) {
   });
   // And do the final trick:
   Promise.all([gotCommitInfo, safeGotBuildHash]).then(checkFixedInBuild, function(someError) {
-    statusEl.textContent = "No idea - something broke.";
     console.error(someError);
+    if (someError && someError.message) {
+      statusEl.textContent = someError.message;
+      return;
+    }
   });
   return false;
 }
