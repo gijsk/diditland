@@ -243,7 +243,7 @@ function onSubmit(e) {
     return hash;
   }, function(error) {
     appendStatusMsg("Failed to get build hash: " + error);
-    statusEl.textContent = "Failed to get build hash for the nightly/aurora/beta build you indicated."
+    statusEl.textContent = "Failed to get build hash for the nightly/beta build you indicated."
   });
   // And do the final trick:
   Promise.all([gotCommitInfo, safeGotBuildHash]).then(checkFixedInBuild, function(someError) {
