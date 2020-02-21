@@ -16,7 +16,7 @@ function getLogURLToCheckItemInAncestryOf(repo, cset, other) {
 }
 
 function getTaskClusterURL(nightlyData) {
-  return "https://index.taskcluster.net/v1/namespaces/gecko.v2." + gRepoWeWant + ".nightly." +
+  return "https://firefox-ci-tc.services.mozilla.com/tasks/index/gecko.v2." + gRepoWeWant + ".nightly." +
          Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
          ".revision";
 }
