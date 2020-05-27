@@ -11,6 +11,8 @@ var gCanonicalRepoURLs = new Map([
   ["mozilla-release", "https://hg.mozilla.org/releases/mozilla-release/rev/"],
 ]);
 
+var gBuildHubURL = "https://buildhub.moz.tools/api/search";
+
 
 var gMercurialLinkMultiMatch = /https?:\/\/hg\.mozilla\.org\/([\w-]+\/)+rev\/([a-f0-9]+)/gi;
 // The same, but without the 'global' flag so we get the groups:
@@ -25,10 +27,33 @@ function getLogURLToCheckItemInAncestryOf(repo, cset, other) {
   return "https://hg.mozilla.org/" + repo + "/log?rev=" + encodeURIComponent("::" + other + " & " + cset);
 }
 
-function getTaskClusterURL(nightlyData) {
-  return "https://firefox-ci-tc.services.mozilla.com/api/index/v1/namespaces/gecko.v2." + gRepoWeWant + ".nightly." +
-         Array.prototype.slice.apply(nightlyData, [1, 4]).join('.') +
-         ".revision";
+function getBuildHubQuery(nightlyData) {
+  let date = Array.prototype.slice.apply(nightlyData, [1, 4]).join('');
+  return JSON.stringify({
+    query: {
+      query_string: {
+        default_operator: "AND",
+        query: "source.product:firefox target.channel:nightly build.id:" + date + "*",
+      }
+    },
+    size: 30,
+    sort: [{ "download.date": "desc" }],
+  });
+}
+
+function findLatestBeta() {
+  return fetch(
+    "https://product-details.mozilla.org/1.0/firefox_versions.json"
+  ).then(
+    function(resp) { return resp.json() }
+  ).then(
+    function(json) {
+      let beta = json.LATEST_FIREFOX_RELEASED_DEVEL_VERSION;
+      beta = beta.split("b");
+      document.getElementById("beta-version").value = parseInt(beta[0], 10);
+      document.getElementById("beta-build").value = beta[1];
+    }
+  );
 }
 
 function getBetaJSONURL(betaTag) {
@@ -95,10 +120,11 @@ function postJSON(url, postData) {
 
 function getNightlyFromTaskCluster(nightlyData) {
   return new Promise(function(resolve, reject) {
-    postJSON(getTaskClusterURL(nightlyData)).then(function(loadEvent) {
+    postJSON(gBuildHubURL, getBuildHubQuery(nightlyData)).then(function(loadEvent) {
       var obj = loadEvent.target.response;
       if (loadEvent.target.status == 200) {
-        var hashes = obj.namespaces.map(function(x) { return x.name });
+        var hashes = obj.hits.hits.map(function(hit) { return hit._source.source.revision });
+        hashes = Array.from(new Set(hashes));
         if (hashes.length > 1) {
           result.appendChild(document.createTextNode("Warning: more than one nightly built that day: "));
           for (let i = 0; i < hashes.length; i++) {
@@ -302,6 +328,7 @@ function onSubmit(e) {
 }
 
 function onLoad() {
+  findLatestBeta();
   nightly = document.getElementById("nightly");
   bugnumber = document.getElementById("bugnumber");
   result = document.getElementById("result");
